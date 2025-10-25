@@ -92,10 +92,13 @@ class VideoGhostingEffect:
                 print("   ✅ Kinect reset complete!")
             else:
                 print("   ⚠️  freenect-camtest not found, skipping reset")
-                
+        
         except Exception as e:
             print(f"   ⚠️  Kinect reset failed: {e}")
             print("   Continuing anyway...")
+        
+        # Give the system a moment to stabilize
+        time.sleep(0.5)
         
         # Give the system a moment to settle
         time.sleep(1)
@@ -350,7 +353,7 @@ Instructions:
                 return None
             return depth
         except Exception as e:
-            print(f"Depth error: {e}")
+            # Don't print every error to avoid spam
             return None
 
     def get_rgb_data(self):
@@ -361,7 +364,7 @@ Instructions:
                 return None
             return rgb
         except Exception as e:
-            print(f"RGB error: {e}")
+            # Don't print every error to avoid spam
             return None
 
     def find_person_center(self, depth):
@@ -614,7 +617,8 @@ Instructions:
         print("Press 'q' to quit, 's' to save a frame")
         print("Looking for Kinect...")
         
-        while True:
+        try:
+            while True:
             # Get data from Kinect
             depth = self.get_depth_data()
             rgb = self.get_rgb_data()
@@ -790,11 +794,24 @@ Instructions:
                 break
             elif key == ord('s'):
                 timestamp = int(time.time() * 1000)
-                cv2.imwrite(f"simple_person_ghost_{timestamp}.png", output)
-                print(f"Saved simple_person_ghost_{timestamp}.png")
+                cv2.imwrite(f"video_ghosting_effect_{timestamp}.png", output)
+                print(f"Saved video_ghosting_effect_{timestamp}.png")
             
-        
-        cv2.destroyAllWindows()
+        except KeyboardInterrupt:
+            print("\n🛑 Interrupted by user")
+        except Exception as e:
+            print(f"❌ Error in main loop: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            print("🧹 Cleaning up...")
+            cv2.destroyAllWindows()
+            # Safe cleanup of freenect
+            try:
+                freenect.sync_stop()
+            except:
+                pass  # Ignore cleanup errors
+            print("✅ Cleanup complete")
 
 if __name__ == "__main__":
     try:
