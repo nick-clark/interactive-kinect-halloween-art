@@ -45,7 +45,7 @@ class SimplePersonGhost:
     def setup_control_panel(self):
         """Create a simple OpenCV control panel"""
         cv2.namedWindow('Control Panel', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('Control Panel', 500, 300)
+        cv2.resizeWindow('Control Panel', 500, 350)
         
         # Distance controls in feet (4 decimal places)
         min_feet = self.depth_min / 304.8
@@ -56,8 +56,11 @@ class SimplePersonGhost:
         # Video opacity
         cv2.createTrackbar('Video Opacity', 'Control Panel', int(self.video_opacity * 100), 100, self.update_video_opacity)
         
-        # Background capture button
-        cv2.createTrackbar('Capture BG', 'Control Panel', 0, 1, self.capture_background_callback)
+        # Set up mouse callback for button
+        cv2.setMouseCallback('Control Panel', self.mouse_callback)
+        
+        # Create the static control panel with button
+        self.create_static_control_panel()
 
     def initialize_kinect(self):
         """Initialize Kinect by running the command-line tool to reset USB interface"""
@@ -103,13 +106,34 @@ class SimplePersonGhost:
         self.video_opacity = val / 100.0
         print(f"Video opacity set to {self.video_opacity:.2f}")
 
-    def capture_background_callback(self, val):
-        """Callback for background capture button"""
-        if val == 1:  # Button was pressed
-            self.capture_background = True
-            print("✅ Background capture triggered!")
-            # Reset button to 0 after capturing
-            cv2.setTrackbarPos('Capture BG', 'Control Panel', 0)
+    def mouse_callback(self, event, x, y, flags, param):
+        """Handle mouse clicks on the control panel"""
+        if event == cv2.EVENT_LBUTTONDOWN:
+            # Check if click is on the Capture BG button
+            # Button area: x=50 to x=200, y=250 to y=300
+            if 50 <= x <= 200 and 250 <= y <= 300:
+                self.capture_background = True
+                print("✅ Background capture triggered!")
+    
+    def create_static_control_panel(self):
+        """Create the static control panel with button"""
+        # Create a black background
+        panel = np.zeros((350, 500, 3), dtype=np.uint8)
+        
+        # Draw button
+        button_color = (0, 255, 0)  # Green button
+        cv2.rectangle(panel, (50, 250), (200, 300), button_color, -1)
+        cv2.rectangle(panel, (50, 250), (200, 300), (255, 255, 255), 2)  # White border
+        
+        # Add button text
+        cv2.putText(panel, 'Capture BG', (60, 285), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        
+        # Add instructions
+        cv2.putText(panel, 'Click "Capture BG" button to capture background', (10, 320), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        # Show the static panel once
+        cv2.imshow('Control Panel', panel)
 
     def update_min_distance_ui(self, val):
         """Update min distance from UI slider"""
