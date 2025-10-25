@@ -47,6 +47,11 @@ Thumbs.db
 
 # Project specific
 captures/
+# Allow sprites but ignore captured images
+!sprites/*.png
+!sprites/*.jpg
+!sprites/*.jpeg
+!sprites/*.gif
 *.png
 *.jpg
 *.jpeg
