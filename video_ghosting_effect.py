@@ -619,118 +619,118 @@ Instructions:
         
         try:
             while True:
-            # Get data from Kinect
-            depth = self.get_depth_data()
-            rgb = self.get_rgb_data()
-            
-            if depth is None or rgb is None:
-                print("Waiting for Kinect...", end='\r')
-                # Show a test pattern while waiting for Kinect
-                test_output = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(test_output, "Waiting for Kinect...", (50, 240), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                cv2.putText(test_output, "Make sure Kinect is plugged in and powered", (50, 280), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.imshow("👻 Video Ghosting Effect - Main View", test_output)
-                cv2.imshow("🔍 Depth Map & Detection", test_output)
-                time.sleep(0.1)
-                continue
-            
-            # Mirror RGB feed for easier interaction
-            rgb_mirrored = cv2.flip(rgb, 1)
-            
-            # Capture background if button was pressed
-            if self.capture_background:
-                # Start time exposure capture (3 seconds)
-                self.time_exposure_start_time = time.time()
-                self.time_exposure_frames_list = []
-                print(f"⏱️ Starting 3-second time exposure capture...")
-                self.capture_background = False  # Reset flag, will be handled in time exposure logic
-            
-            # Handle time exposure capture (3-second duration)
-            if self.time_exposure_start_time is not None:
-                elapsed_time = time.time() - self.time_exposure_start_time
-                if elapsed_time < self.time_exposure_duration:
-                    # Still capturing - add frame to list
-                    self.time_exposure_frames_list.append(rgb_mirrored.copy())
-                    remaining_time = self.time_exposure_duration - elapsed_time
-                    print(f"⏱️ Time exposure: {elapsed_time:.1f}s / {self.time_exposure_duration:.1f}s (frames: {len(self.time_exposure_frames_list)})")
-                    
-                    # Progress will be shown on the final output layer later
-                else:
-                    # Time exposure complete - process frames
-                    print("⏱️ Processing time exposure frames with noise reduction...")
-                    self.background_image = self.average_frames_with_noise_reduction(self.time_exposure_frames_list)
-                    print(f"✅ 3-second time exposure background captured! ({len(self.time_exposure_frames_list)} frames)")
-                    print("You can now step in front of the camera.")
-                    # Mark as completed
-                    self.time_exposure_start_time = None
+                # Get data from Kinect
+                depth = self.get_depth_data()
+                rgb = self.get_rgb_data()
+                
+                if depth is None or rgb is None:
+                    print("Waiting for Kinect...", end='\r')
+                    # Show a test pattern while waiting for Kinect
+                    test_output = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(test_output, "Waiting for Kinect...", (50, 240), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                    cv2.putText(test_output, "Make sure Kinect is plugged in and powered", (50, 280), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.imshow("👻 Video Ghosting Effect - Main View", test_output)
+                    cv2.imshow("🔍 Depth Map & Detection", test_output)
+                    time.sleep(0.1)
+                    continue
+                
+                # Mirror RGB feed for easier interaction
+                rgb_mirrored = cv2.flip(rgb, 1)
+                
+                # Capture background if button was pressed
+                if self.capture_background:
+                    # Start time exposure capture (3 seconds)
+                    self.time_exposure_start_time = time.time()
                     self.time_exposure_frames_list = []
-            
-            # Create output with video opacity
-            if self.background_image is not None:
-                # Use captured background
-                output = self.background_image.copy()
-                if self.video_opacity > 0:
-                    # Blend current frame with background based on opacity
-                    output = cv2.addWeighted(self.background_image, 1 - self.video_opacity,
-                                            rgb_mirrored, self.video_opacity, 0)
-            elif self.video_opacity > 0:
-                # Use live feed as background
-                output = rgb_mirrored.copy()
-                output = cv2.addWeighted(output, self.video_opacity,
-                                       np.zeros_like(output), 1 - self.video_opacity, 0)
-            else:
-                output = np.zeros_like(rgb_mirrored)
-            
-            # Mirror depth feed to match RGB
-            depth_mirrored = cv2.flip(depth, 1)
-            
-            # Performance optimization: only process silhouettes every few frames
-            self.frame_counter += 1
-            should_process_silhouette = (self.frame_counter % self.frame_skip == 0)
-            
-            # Find all person blobs
-            person_blobs = self.find_all_person_blobs(depth_mirrored)
-            
-            if person_blobs and should_process_silhouette:
-                # Create combined silhouette from all detected people
-                combined_silhouette = np.zeros_like(depth_mirrored, dtype=np.uint8)
+                    print(f"⏱️ Starting 3-second time exposure capture...")
+                    self.capture_background = False  # Reset flag, will be handled in time exposure logic
                 
-                for i, blob_data in enumerate(person_blobs):
-                    # Extract blob data
-                    if len(blob_data) == 5:
-                        cx, cy, blob_depth, contour, person_id = blob_data
+                # Handle time exposure capture (3-second duration)
+                if self.time_exposure_start_time is not None:
+                    elapsed_time = time.time() - self.time_exposure_start_time
+                    if elapsed_time < self.time_exposure_duration:
+                        # Still capturing - add frame to list
+                        self.time_exposure_frames_list.append(rgb_mirrored.copy())
+                        remaining_time = self.time_exposure_duration - elapsed_time
+                        print(f"⏱️ Time exposure: {elapsed_time:.1f}s / {self.time_exposure_duration:.1f}s (frames: {len(self.time_exposure_frames_list)})")
+                        
+                        # Progress will be shown on the final output layer later
                     else:
-                        cx, cy, blob_depth, contour = blob_data
-                        person_id = i + 1
-                    
-                    # Draw bounding box around blob (debug mode only)
-                    x, y, w, h = cv2.boundingRect(contour)
-                    if self.debug_mode:
-                        cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    
-                    # Create mask for this person
-                    person_mask = np.zeros_like(depth_mirrored, dtype=np.uint8)
-                    cv2.fillPoly(person_mask, [contour], 255)
-                    
-                    # Add to combined silhouette
-                    combined_silhouette = cv2.bitwise_or(combined_silhouette, person_mask)
-                    
-                    # Draw person number and distance (debug mode only)
-                    if self.debug_mode:
-                        distance_feet = blob_depth / 304.8
-                        cv2.putText(output, f"Person {person_id}: {distance_feet:.2f}ft", 
-                                   (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                        # Time exposure complete - process frames
+                        print("⏱️ Processing time exposure frames with noise reduction...")
+                        self.background_image = self.average_frames_with_noise_reduction(self.time_exposure_frames_list)
+                        print(f"✅ 3-second time exposure background captured! ({len(self.time_exposure_frames_list)} frames)")
+                        print("You can now step in front of the camera.")
+                        # Mark as completed
+                        self.time_exposure_start_time = None
+                        self.time_exposure_frames_list = []
                 
-                # Add current silhouette to trail
-                if np.any(combined_silhouette):
-                    self.add_silhouette_to_trail(combined_silhouette)
-                    self.last_silhouette = combined_silhouette.copy()
-            elif person_blobs and not should_process_silhouette:
-                # Use last silhouette for skipped frames
-                if self.last_silhouette is not None:
-                    self.add_silhouette_to_trail(self.last_silhouette)
+                # Create output with video opacity
+                if self.background_image is not None:
+                    # Use captured background
+                    output = self.background_image.copy()
+                    if self.video_opacity > 0:
+                        # Blend current frame with background based on opacity
+                        output = cv2.addWeighted(self.background_image, 1 - self.video_opacity,
+                                                rgb_mirrored, self.video_opacity, 0)
+                elif self.video_opacity > 0:
+                    # Use live feed as background
+                    output = rgb_mirrored.copy()
+                    output = cv2.addWeighted(output, self.video_opacity,
+                                           np.zeros_like(output), 1 - self.video_opacity, 0)
+                else:
+                    output = np.zeros_like(rgb_mirrored)
+                
+                # Mirror depth feed to match RGB
+                depth_mirrored = cv2.flip(depth, 1)
+                
+                # Performance optimization: only process silhouettes every few frames
+                self.frame_counter += 1
+                should_process_silhouette = (self.frame_counter % self.frame_skip == 0)
+                
+                # Find all person blobs
+                person_blobs = self.find_all_person_blobs(depth_mirrored)
+                
+                if person_blobs and should_process_silhouette:
+                    # Create combined silhouette from all detected people
+                    combined_silhouette = np.zeros_like(depth_mirrored, dtype=np.uint8)
+                    
+                    for i, blob_data in enumerate(person_blobs):
+                        # Extract blob data
+                        if len(blob_data) == 5:
+                            cx, cy, blob_depth, contour, person_id = blob_data
+                        else:
+                            cx, cy, blob_depth, contour = blob_data
+                            person_id = i + 1
+                        
+                        # Draw bounding box around blob (debug mode only)
+                        x, y, w, h = cv2.boundingRect(contour)
+                        if self.debug_mode:
+                            cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                        
+                        # Create mask for this person
+                        person_mask = np.zeros_like(depth_mirrored, dtype=np.uint8)
+                        cv2.fillPoly(person_mask, [contour], 255)
+                        
+                        # Add to combined silhouette
+                        combined_silhouette = cv2.bitwise_or(combined_silhouette, person_mask)
+                        
+                        # Draw person number and distance (debug mode only)
+                        if self.debug_mode:
+                            distance_feet = blob_depth / 304.8
+                            cv2.putText(output, f"Person {person_id}: {distance_feet:.2f}ft", 
+                                       (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                    
+                    # Add current silhouette to trail
+                    if np.any(combined_silhouette):
+                        self.add_silhouette_to_trail(combined_silhouette)
+                        self.last_silhouette = combined_silhouette.copy()
+                elif person_blobs and not should_process_silhouette:
+                    # Use last silhouette for skipped frames
+                    if self.last_silhouette is not None:
+                        self.add_silhouette_to_trail(self.last_silhouette)
                 
                 # Start with background if available, otherwise use current frame
                 if self.background_image is not None:
@@ -748,54 +748,55 @@ Instructions:
                         mask = trail_silhouette > 0
                         
                         # Apply silhouette with transparency using vectorized operations
-                        output[mask] = (1 - opacity) * output[mask] + opacity * self.silhouette_color
+                        silhouette_color_array = np.array(self.silhouette_color, dtype=np.uint8)
+                        output[mask] = (1 - opacity) * output[mask] + opacity * silhouette_color_array
                 
                 # Display status (debug mode only)
                 if self.debug_mode:
                     cv2.putText(output, f"{len(person_blobs)} person(s) detected!", 
                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            else:
-                # Show current distance range in feet (debug mode only)
-                if self.debug_mode:
-                    min_feet = self.depth_min / 304.8
-                    max_feet = self.depth_max / 304.8
-                    cv2.putText(output, "No person detected - adjust distance range", 
-                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    cv2.putText(output, f"Range: {min_feet:.4f} - {max_feet:.4f} feet", 
-                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            
-            # Add time exposure countdown text to top layer (always visible)
-            if self.time_exposure_start_time is not None:
-                elapsed_time = time.time() - self.time_exposure_start_time
-                remaining_time = self.time_exposure_duration - elapsed_time
-                if remaining_time > 0:
-                    cv2.putText(output, f"Capturing background... {remaining_time:.1f}s remaining", 
-                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            
-            # Display output
-            cv2.imshow("👻 Video Ghosting Effect - Main View", output)
-            
-            # Show debug depth mask with gradient
-            debug_mask = self.normalize_depth(depth_mirrored)
-            if person_blobs:
-                # Draw detected contours on gradient
-                for blob_data in person_blobs:
-                    # Extract contour from blob data
-                    if len(blob_data) == 5:
-                        _, _, _, contour, _ = blob_data
-                    else:
-                        _, _, _, contour = blob_data
-                    cv2.drawContours(debug_mask, [contour], -1, 0, 2)  # Draw in black for visibility
-            cv2.imshow("🔍 Depth Map & Detection", debug_mask)
-            
-            # Handle key presses
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-            elif key == ord('s'):
-                timestamp = int(time.time() * 1000)
-                cv2.imwrite(f"video_ghosting_effect_{timestamp}.png", output)
-                print(f"Saved video_ghosting_effect_{timestamp}.png")
+                else:
+                    # Show current distance range in feet (debug mode only)
+                    if self.debug_mode:
+                        min_feet = self.depth_min / 304.8
+                        max_feet = self.depth_max / 304.8
+                        cv2.putText(output, "No person detected - adjust distance range", 
+                                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        cv2.putText(output, f"Range: {min_feet:.4f} - {max_feet:.4f} feet", 
+                                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                # Add time exposure countdown text to top layer (always visible)
+                if self.time_exposure_start_time is not None:
+                    elapsed_time = time.time() - self.time_exposure_start_time
+                    remaining_time = self.time_exposure_duration - elapsed_time
+                    if remaining_time > 0:
+                        cv2.putText(output, f"Capturing background... {remaining_time:.1f}s remaining", 
+                                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                
+                # Display output
+                cv2.imshow("👻 Video Ghosting Effect - Main View", output)
+                
+                # Show debug depth mask with gradient
+                debug_mask = self.normalize_depth(depth_mirrored)
+                if person_blobs:
+                    # Draw detected contours on gradient
+                    for blob_data in person_blobs:
+                        # Extract contour from blob data
+                        if len(blob_data) == 5:
+                            _, _, _, contour, _ = blob_data
+                        else:
+                            _, _, _, contour = blob_data
+                        cv2.drawContours(debug_mask, [contour], -1, 0, 2)  # Draw in black for visibility
+                cv2.imshow("🔍 Depth Map & Detection", debug_mask)
+                
+                # Handle key presses
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                elif key == ord('s'):
+                    timestamp = int(time.time() * 1000)
+                    cv2.imwrite(f"video_ghosting_effect_{timestamp}.png", output)
+                    print(f"Saved video_ghosting_effect_{timestamp}.png")
             
         except KeyboardInterrupt:
             print("\n🛑 Interrupted by user")
