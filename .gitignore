@@ -46,7 +46,9 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific
-captures/
+# Keep captures folder but ignore its contents
+captures/*
+!captures/.gitkeep
 # Allow sprites but ignore captured images
 !sprites/
 !sprites/*.png
