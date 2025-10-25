@@ -11,7 +11,7 @@ from PIL import Image, ImageTk
 import threading
 import subprocess
 
-class SimplePersonGhost:
+class VideoGhostingEffect:
     def __init__(self):
         # Default parameters - User's preferred settings
         self.depth_min = 217      # mm = 0.7120 feet
@@ -24,13 +24,16 @@ class SimplePersonGhost:
         self.motor_enabled = False
         self.motor_tilt = 0  # -30 to +30 degrees
         
-        # Ghost sprites - load all ghost images
-        self.ghost_sprites = []
-        self.load_ghost_sprites()
+        # Video ghosting effect settings (optimized for performance)
+        self.ghost_trail_length = 5  # Reduced from 10 to 5 for better performance
+        self.ghost_trails = []  # List to store previous silhouettes
+        self.silhouette_alpha = 0.4  # Increased alpha since we have fewer layers
+        self.silhouette_color = (255, 255, 255)  # White silhouettes
         
-        # Track ghost assignments for each person
-        self.person_ghost_map = {}  # Maps person ID to ghost sprite
-        self.person_fade_data = {}  # Maps person ID to fade cycle data
+        # Performance optimization settings
+        self.frame_skip = 2  # Process every 2nd frame for silhouette detection
+        self.frame_counter = 0
+        self.last_silhouette = None
         
         # Background capture
         self.background_image = None
@@ -328,29 +331,16 @@ Instructions:
             print("Make sure Kinect is connected and freenect is working")
 
 
-    def load_ghost_sprites(self):
-        """Load all ghost sprite images from sprites folder"""
-        sprite_folder = "sprites"
+    def create_silhouette_from_depth(self, depth_map, person_mask):
+        """Create a silhouette from the depth map for the detected person"""
+        # Create a silhouette by using the person mask
+        silhouette = np.zeros_like(depth_map, dtype=np.uint8)
+        silhouette[person_mask] = 255
         
-        if not os.path.exists(sprite_folder):
-            print(f"Sprite folder '{sprite_folder}' not found!")
-            return
+        # Convert to 3-channel for blending
+        silhouette_3ch = cv2.cvtColor(silhouette, cv2.COLOR_GRAY2BGR)
         
-        # Load all ghost images
-        for filename in sorted(os.listdir(sprite_folder)):
-            if filename.endswith('.png'):
-                sprite_path = os.path.join(sprite_folder, filename)
-                sprite = cv2.imread(sprite_path, cv2.IMREAD_UNCHANGED)
-                if sprite is not None:
-                    self.ghost_sprites.append(sprite)
-                    print(f"Loaded ghost sprite: {filename}")
-                else:
-                    print(f"Failed to load: {filename}")
-        
-        if len(self.ghost_sprites) == 0:
-            print("No ghost sprites loaded!")
-        else:
-            print(f"Total ghosts loaded: {len(self.ghost_sprites)}")
+        return silhouette_3ch
 
     def get_depth_data(self):
         """Get depth data from Kinect"""
@@ -416,42 +406,14 @@ Instructions:
         d[np.isnan(d)] = 0
         return d.astype(np.uint8)
     
-    def assign_ghost_to_person(self, person_id):
-        """Assign a random ghost to a person if they don't have one yet"""
-        if person_id not in self.person_ghost_map:
-            if len(self.ghost_sprites) > 0:
-                self.person_ghost_map[person_id] = random.choice(self.ghost_sprites)
-                # Initialize fade data for this person
-                # Random cycle time between 0.5 and 2.0 seconds
-                cycle_time = random.uniform(0.5, 2.0)
-                self.person_fade_data[person_id] = {
-                    'cycle_time': cycle_time,
-                    'start_time': time.time(),
-                    'min_opacity': 0.4,
-                    'max_opacity': 0.8
-                }
-                print(f"Assigned ghost to person {person_id} with {cycle_time:.2f}s fade cycle")
-        return self.person_ghost_map.get(person_id, None)
+    def add_silhouette_to_trail(self, silhouette):
+        """Add a silhouette to the ghost trail"""
+        self.ghost_trails.append(silhouette.copy())
+        
+        # Keep only the last N frames
+        if len(self.ghost_trails) > self.ghost_trail_length:
+            self.ghost_trails.pop(0)
     
-    def get_current_opacity(self, person_id):
-        """Calculate current opacity for a person's ghost based on fade cycle"""
-        if person_id not in self.person_fade_data:
-            return self.ghost_alpha
-        
-        fade_data = self.person_fade_data[person_id]
-        elapsed = time.time() - fade_data['start_time']
-        
-        # Calculate position in cycle (0 to 1)
-        cycle_position = (elapsed % fade_data['cycle_time']) / fade_data['cycle_time']
-        
-        # Use sine wave for smooth fade in/out
-        # Sine goes from -1 to 1, so we adjust to 0 to 1
-        sine_value = (np.sin(cycle_position * 2 * np.pi) + 1) / 2
-        
-        # Map to min/max opacity range
-        opacity = fade_data['min_opacity'] + sine_value * (fade_data['max_opacity'] - fade_data['min_opacity'])
-        
-        return opacity
     
     def track_people(self, current_blobs):
         """Track people across frames and maintain ghost assignments"""
@@ -647,7 +609,7 @@ Instructions:
 
     def run(self):
         """Main loop"""
-        print("👻 Simple Person Ghost Tracking")
+        print("👻 Video Ghosting Effect")
         print("Use the Control Panel to adjust settings!")
         print("Press 'q' to quit, 's' to save a frame")
         print("Looking for Kinect...")
@@ -665,7 +627,7 @@ Instructions:
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
                 cv2.putText(test_output, "Make sure Kinect is plugged in and powered", (50, 280), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.imshow("👻 Ghost Tracking - Main View", test_output)
+                cv2.imshow("👻 Video Ghosting Effect - Main View", test_output)
                 cv2.imshow("🔍 Depth Map & Detection", test_output)
                 time.sleep(0.1)
                 continue
@@ -720,13 +682,19 @@ Instructions:
             # Mirror depth feed to match RGB
             depth_mirrored = cv2.flip(depth, 1)
             
+            # Performance optimization: only process silhouettes every few frames
+            self.frame_counter += 1
+            should_process_silhouette = (self.frame_counter % self.frame_skip == 0)
+            
             # Find all person blobs
             person_blobs = self.find_all_person_blobs(depth_mirrored)
             
-            if person_blobs:
-                # Draw ghost sprite on each detected blob
+            if person_blobs and should_process_silhouette:
+                # Create combined silhouette from all detected people
+                combined_silhouette = np.zeros_like(depth_mirrored, dtype=np.uint8)
+                
                 for i, blob_data in enumerate(person_blobs):
-                    # Extract blob data (now includes person ID)
+                    # Extract blob data
                     if len(blob_data) == 5:
                         cx, cy, blob_depth, contour, person_id = blob_data
                     else:
@@ -738,59 +706,45 @@ Instructions:
                     if self.debug_mode:
                         cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 2)
                     
-                    # Get or assign ghost sprite for this person
-                    ghost_sprite = self.assign_ghost_to_person(person_id)
+                    # Create mask for this person
+                    person_mask = np.zeros_like(depth_mirrored, dtype=np.uint8)
+                    cv2.fillPoly(person_mask, [contour], 255)
                     
-                    if ghost_sprite is not None:
-                        # Get current opacity for this person's fade cycle
-                        current_opacity = self.get_current_opacity(person_id)
-                        
-                        # Draw ghost sprite proportionally scaled to bounding box height
-                        # Height matches bounding box, width maintains sprite's aspect ratio
-                        sprite_h, sprite_w = ghost_sprite.shape[:2]
-                        aspect_ratio = sprite_w / sprite_h
-                        
-                        # Use bounding box height as sprite height
-                        ghost_height = h
-                        ghost_width = int(ghost_height * aspect_ratio)
-                        
-                        # Resize sprite maintaining aspect ratio
-                        ghost_resized = cv2.resize(ghost_sprite, (ghost_width, ghost_height))
-                        
-                        # Center sprite in bounding box
-                        center_x = x + w // 2
-                        center_y = y + h // 2
-                        
-                        # Calculate position to center the sprite
-                        x1 = max(0, center_x - ghost_width // 2)
-                        y1 = max(0, center_y - ghost_height // 2)
-                        x2 = min(output.shape[1], center_x + ghost_width // 2)
-                        y2 = min(output.shape[0], center_y + ghost_height // 2)
-                        
-                        # Adjust if needed
-                        actual_w = x2 - x1
-                        actual_h = y2 - y1
-                        if actual_w != ghost_width or actual_h != ghost_height:
-                            ghost_resized = cv2.resize(ghost_resized, (actual_w, actual_h))
-                        
-                        # Blend sprite with background using current opacity
-                        if ghost_resized.shape[2] == 4:
-                            alpha = ghost_resized[:, :, 3] / 255.0
-                            ghost_rgb = ghost_resized[:, :, :3]
-                        else:
-                            alpha = np.ones((ghost_resized.shape[0], ghost_resized.shape[1]))
-                            ghost_rgb = ghost_resized
-                        
-                        roi = output[y1:y2, x1:x2]
-                        for c in range(3):
-                            roi[:, :, c] = (1 - alpha * current_opacity) * roi[:, :, c] + \
-                                          (alpha * current_opacity) * ghost_rgb[:, :, c]
+                    # Add to combined silhouette
+                    combined_silhouette = cv2.bitwise_or(combined_silhouette, person_mask)
                     
                     # Draw person number and distance (debug mode only)
                     if self.debug_mode:
                         distance_feet = blob_depth / 304.8
                         cv2.putText(output, f"Person {person_id}: {distance_feet:.2f}ft", 
                                    (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                
+                # Add current silhouette to trail
+                if np.any(combined_silhouette):
+                    self.add_silhouette_to_trail(combined_silhouette)
+                    self.last_silhouette = combined_silhouette.copy()
+            elif person_blobs and not should_process_silhouette:
+                # Use last silhouette for skipped frames
+                if self.last_silhouette is not None:
+                    self.add_silhouette_to_trail(self.last_silhouette)
+                
+                # Start with background if available, otherwise use current frame
+                if self.background_image is not None:
+                    output = self.background_image.copy()
+                else:
+                    output = rgb_mirrored.copy()
+                
+                # Draw all silhouettes in the trail with decreasing opacity (optimized)
+                for i, trail_silhouette in enumerate(self.ghost_trails):
+                    if np.any(trail_silhouette):
+                        # Calculate opacity (newer silhouettes are more opaque)
+                        opacity = self.silhouette_alpha * (i + 1) / len(self.ghost_trails)
+                        
+                        # Create mask for silhouette (white areas only)
+                        mask = trail_silhouette > 0
+                        
+                        # Apply silhouette with transparency using vectorized operations
+                        output[mask] = (1 - opacity) * output[mask] + opacity * self.silhouette_color
                 
                 # Display status (debug mode only)
                 if self.debug_mode:
@@ -815,7 +769,7 @@ Instructions:
                                (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             
             # Display output
-            cv2.imshow("👻 Ghost Tracking - Main View", output)
+            cv2.imshow("👻 Video Ghosting Effect - Main View", output)
             
             # Show debug depth mask with gradient
             debug_mask = self.normalize_depth(depth_mirrored)
@@ -844,8 +798,8 @@ Instructions:
 
 if __name__ == "__main__":
     try:
-        tracker = SimplePersonGhost()
-        tracker.run()
+        effect = VideoGhostingEffect()
+        effect.run()
     except Exception as e:
         print(f"An error occurred: {e}")
         import traceback
