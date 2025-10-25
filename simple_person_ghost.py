@@ -35,6 +35,7 @@ class SimplePersonGhost:
         # Background capture
         self.background_image = None
         self.capture_background = False
+        self.debug_mode = False  # Default to off
         
         # Initialize Kinect
         self.initialize_kinect()
@@ -55,6 +56,8 @@ class SimplePersonGhost:
         
         # Video opacity
         cv2.createTrackbar('Video Opacity', 'Control Panel', int(self.video_opacity * 100), 100, self.update_video_opacity)
+        
+        # Debug mode will be handled by mouse callback checkbox
         
         # Set up mouse callback for button
         cv2.setMouseCallback('Control Panel', self.mouse_callback)
@@ -106,21 +109,54 @@ class SimplePersonGhost:
         self.video_opacity = val / 100.0
         print(f"Video opacity set to {self.video_opacity:.2f}")
 
+
     def mouse_callback(self, event, x, y, flags, param):
         """Handle mouse clicks on the control panel"""
         if event == cv2.EVENT_LBUTTONDOWN:
+            print(f"Mouse click detected at ({x}, {y})")
+            
             # Check if click is on the Capture BG button
             # Button area: x=50 to x=200, y=250 to y=300
             if 50 <= x <= 200 and 250 <= y <= 300:
                 self.capture_background = True
                 print("✅ Background capture triggered!")
+            
+            # Check if click is on the Debug checkbox
+            # Checkbox area: x=50 to x=80, y=200 to y=230
+            elif 50 <= x <= 80 and 200 <= y <= 230:
+                self.debug_mode = not self.debug_mode
+                print(f"🔧 Debug mode {'enabled' if self.debug_mode else 'disabled'}")
+                # Redraw the control panel to update checkbox state
+                self.create_static_control_panel()
+            
+            else:
+                print(f"Click outside interactive areas")
     
     def create_static_control_panel(self):
-        """Create the static control panel with button"""
+        """Create the static control panel with button and checkbox"""
         # Create a black background
         panel = np.zeros((350, 500, 3), dtype=np.uint8)
         
-        # Draw button
+        # Draw debug checkbox
+        checkbox_x, checkbox_y = 50, 200
+        checkbox_size = 30
+        
+        # Checkbox border
+        cv2.rectangle(panel, (checkbox_x, checkbox_y), 
+                     (checkbox_x + checkbox_size, checkbox_y + checkbox_size), 
+                     (255, 255, 255), 2)
+        
+        # Checkbox fill if checked
+        if self.debug_mode:
+            cv2.rectangle(panel, (checkbox_x + 3, checkbox_y + 3), 
+                         (checkbox_x + checkbox_size - 3, checkbox_y + checkbox_size - 3), 
+                         (0, 255, 0), -1)
+        
+        # Checkbox label
+        cv2.putText(panel, 'Debugging On', (checkbox_x + 40, checkbox_y + 20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        
+        # Draw Capture BG button
         button_color = (0, 255, 0)  # Green button
         cv2.rectangle(panel, (50, 250), (200, 300), button_color, -1)
         cv2.rectangle(panel, (50, 250), (200, 300), (255, 255, 255), 2)  # White border
@@ -129,11 +165,14 @@ class SimplePersonGhost:
         cv2.putText(panel, 'Capture BG', (60, 285), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
         
         # Add instructions
-        cv2.putText(panel, 'Click "Capture BG" button to capture background', (10, 320), 
+        cv2.putText(panel, 'Click checkbox to toggle debug mode', (10, 320), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(panel, 'Click "Capture BG" button to capture background', (10, 340), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         # Show the static panel once
         cv2.imshow('Control Panel', panel)
+        cv2.waitKey(1)  # Ensure the window is displayed
 
     def update_min_distance_ui(self, val):
         """Update min distance from UI slider"""
@@ -624,9 +663,10 @@ Instructions:
                         cx, cy, blob_depth, contour = blob_data
                         person_id = i + 1
                     
-                    # Draw bounding box around blob
+                    # Draw bounding box around blob (debug mode only)
                     x, y, w, h = cv2.boundingRect(contour)
-                    cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    if self.debug_mode:
+                        cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 2)
                     
                     # Get or assign ghost sprite for this person
                     ghost_sprite = self.assign_ghost_to_person(person_id)
@@ -676,22 +716,25 @@ Instructions:
                             roi[:, :, c] = (1 - alpha * current_opacity) * roi[:, :, c] + \
                                           (alpha * current_opacity) * ghost_rgb[:, :, c]
                     
-                    # Draw person number and distance
-                    distance_feet = blob_depth / 304.8
-                    cv2.putText(output, f"Person {person_id}: {distance_feet:.2f}ft", 
-                               (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                    # Draw person number and distance (debug mode only)
+                    if self.debug_mode:
+                        distance_feet = blob_depth / 304.8
+                        cv2.putText(output, f"Person {person_id}: {distance_feet:.2f}ft", 
+                                   (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                 
-                # Display status
-                cv2.putText(output, f"{len(person_blobs)} person(s) detected!", 
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                # Display status (debug mode only)
+                if self.debug_mode:
+                    cv2.putText(output, f"{len(person_blobs)} person(s) detected!", 
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             else:
-                # Show current distance range in feet
-                min_feet = self.depth_min / 304.8
-                max_feet = self.depth_max / 304.8
-                cv2.putText(output, "No person detected - adjust distance range", 
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                cv2.putText(output, f"Range: {min_feet:.4f} - {max_feet:.4f} feet", 
-                           (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                # Show current distance range in feet (debug mode only)
+                if self.debug_mode:
+                    min_feet = self.depth_min / 304.8
+                    max_feet = self.depth_max / 304.8
+                    cv2.putText(output, "No person detected - adjust distance range", 
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    cv2.putText(output, f"Range: {min_feet:.4f} - {max_feet:.4f} feet", 
+                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
             # Display output
             cv2.imshow("👻 Ghost Tracking - Main View", output)
