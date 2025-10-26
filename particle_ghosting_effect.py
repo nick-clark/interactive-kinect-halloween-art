@@ -11,7 +11,102 @@ from PIL import Image, ImageTk
 import threading
 import subprocess
 
-class SimplePersonGhost:
+class Particle:
+    def __init__(self, x, y, screen_width, screen_height):
+        self.x = x
+        self.y = y
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        
+        # Random initial velocity
+        self.vx = random.uniform(-3.0, 3.0)
+        self.vy = random.uniform(-3.0, 3.0)
+        
+        # Store initial speed for decay reference
+        self.initial_speed = math.sqrt(self.vx**2 + self.vy**2)
+        self.current_speed = self.initial_speed
+        
+        # Collision state
+        self.was_hit = False
+        self.hit_frames_ago = 0
+        
+        # Visual properties
+        self.size = 3
+        self.color = (0, 0, 255)  # Red dots (BGR format)
+    
+    def update(self, person_contours, speed_decay=0.98, min_speed=0.1, bounce_multiplier=1.5):
+        """Update particle position and handle collisions"""
+        # Check for collisions with person contours
+        self.check_collisions(person_contours, bounce_multiplier)
+        
+        # Update position
+        self.x += self.vx
+        self.y += self.vy
+        
+        # Handle screen boundaries (bounce off edges)
+        if self.x <= 0 or self.x >= self.screen_width:
+            self.vx = -self.vx
+            self.x = max(0, min(self.screen_width, self.x))
+        
+        if self.y <= 0 or self.y >= self.screen_height:
+            self.vy = -self.vy
+            self.y = max(0, min(self.screen_height, self.y))
+        
+        # Apply speed decay if not recently hit
+        if not self.was_hit:
+            self.vx *= speed_decay
+            self.vy *= speed_decay
+            
+            # Don't let speed go below minimum
+            current_speed = math.sqrt(self.vx**2 + self.vy**2)
+            if current_speed < min_speed and current_speed > 0:
+                # Normalize and set to minimum speed
+                if current_speed > 0:
+                    self.vx = (self.vx / current_speed) * min_speed
+                    self.vy = (self.vy / current_speed) * min_speed
+        
+        # Update hit state
+        if self.was_hit:
+            self.hit_frames_ago += 1
+            if self.hit_frames_ago > 5:  # Reset hit state after 5 frames
+                self.was_hit = False
+                self.hit_frames_ago = 0
+    
+    def check_collisions(self, person_contours, bounce_multiplier):
+        """Check if particle collides with any person contour"""
+        for contour in person_contours:
+            # Check if particle is inside the contour
+            if cv2.pointPolygonTest(contour, (self.x, self.y), False) >= 0:
+                # Calculate bounce direction (away from contour center)
+                M = cv2.moments(contour)
+                if M["m00"] > 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    
+                    # Calculate direction away from center
+                    dx = self.x - cx
+                    dy = self.y - cy
+                    distance = math.sqrt(dx**2 + dy**2)
+                    
+                    if distance > 0:
+                        # Normalize direction
+                        dx /= distance
+                        dy /= distance
+                        
+                        # Calculate bounce velocity proportional to current speed
+                        current_speed = math.sqrt(self.vx**2 + self.vy**2)
+                        bounce_speed = current_speed * bounce_multiplier
+                        
+                        # Set new velocity
+                        self.vx = dx * bounce_speed
+                        self.vy = dy * bounce_speed
+                        
+                        # Mark as hit
+                        self.was_hit = True
+                        self.hit_frames_ago = 0
+                        break
+
+class ParticleGhostingEffect:
     def __init__(self):
         # Default parameters - User's preferred settings
         self.depth_min = 217      # mm = 0.7120 feet
@@ -20,17 +115,25 @@ class SimplePersonGhost:
         self.ghost_alpha = 0.7
         self.ghost_color = (200, 200, 255)  # Light blue ghost
         
-        # Motor control settings
-        self.motor_enabled = False
-        self.motor_tilt = 0  # -30 to +30 degrees
+        # Video ghosting effect settings (optimized for performance)
+        self.ghost_trail_length = 5  # Reduced from 10 to 5 for better performance
+        self.ghost_trails = []  # List to store previous silhouettes
+        self.silhouette_alpha = 0.4  # Increased alpha since we have fewer layers
+        self.silhouette_color = (255, 255, 255)  # White silhouettes
         
-        # Ghost sprites - load all ghost images
-        self.ghost_sprites = []
-        self.load_ghost_sprites()
+        # Performance optimization settings
+        self.frame_skip = 2  # Process every 2nd frame for silhouette detection
+        self.frame_counter = 0
+        self.last_silhouette = None
         
-        # Track ghost assignments for each person
-        self.person_ghost_map = {}  # Maps person ID to ghost sprite
-        self.person_fade_data = {}  # Maps person ID to fade cycle data
+        # Particle system settings
+        self.particle_count = 100
+        self.particles = []
+        self.min_speed = 0.5
+        self.max_speed = 3.0
+        self.speed_decay = 0.98
+        self.min_speed_threshold = 0.1
+        self.bounce_multiplier = 1.5
         
         # Background capture
         self.background_image = None
@@ -44,6 +147,9 @@ class SimplePersonGhost:
         
         # Initialize Kinect
         self.initialize_kinect()
+        
+        # Initialize particles
+        self.initialize_particles()
         
         # Create control panel
         self.setup_control_panel()
@@ -61,6 +167,11 @@ class SimplePersonGhost:
         
         # Video opacity
         cv2.createTrackbar('Video Opacity', 'Control Panel', int(self.video_opacity * 100), 100, self.update_video_opacity)
+        
+        # Particle controls
+        cv2.createTrackbar('Particle Count', 'Control Panel', self.particle_count, 500, self.update_particle_count)
+        cv2.createTrackbar('Min Speed', 'Control Panel', int(self.min_speed * 10), 50, self.update_min_speed)
+        cv2.createTrackbar('Max Speed', 'Control Panel', int(self.max_speed * 10), 50, self.update_max_speed)
         
         # Debug mode will be handled by mouse callback checkbox
         
@@ -89,31 +200,182 @@ class SimplePersonGhost:
                 print("   ✅ Kinect reset complete!")
             else:
                 print("   ⚠️  freenect-camtest not found, skipping reset")
-                
+        
         except Exception as e:
             print(f"   ⚠️  Kinect reset failed: {e}")
             print("   Continuing anyway...")
         
-        # Give the system a moment to settle
-        time.sleep(2)
+        # Give the system a moment to stabilize
+        time.sleep(0.5)
         
-        # Test device availability with a gentle probe
-        print("   Testing device connection...")
-        for attempt in range(5):
-            try:
-                # Try to get a single frame to test if device is ready
-                depth, _ = freenect.sync_get_depth()
-                if depth is not None:
-                    print("   ✅ Device is ready!")
-                    break
-                else:
-                    print(f"   Attempt {attempt + 1}/5: Device not ready, waiting...")
-                    time.sleep(1)
-            except Exception as e:
-                print(f"   Attempt {attempt + 1}/5: Error - {e}")
-                time.sleep(1)
+        # Give the system a moment to settle
+        time.sleep(1)
+    
+    def initialize_particles(self):
+        """Initialize particle system"""
+        print(f"🎆 Initializing {self.particle_count} particles...")
+        self.particles = []
+        
+        # Create particles with random positions and velocities
+        for i in range(self.particle_count):
+            # Random position within screen bounds (assuming 640x480 for now)
+            x = random.randint(0, 640)
+            y = random.randint(0, 480)
+            
+            # Create particle with random velocity within speed range
+            particle = Particle(x, y, 640, 480)
+            
+            # Set random velocity within speed range
+            speed = random.uniform(self.min_speed, self.max_speed)
+            angle = random.uniform(0, 2 * math.pi)
+            particle.vx = speed * math.cos(angle)
+            particle.vy = speed * math.sin(angle)
+            particle.initial_speed = speed
+            
+            self.particles.append(particle)
+        
+        print(f"✅ {len(self.particles)} particles initialized!")
+    
+    def update_particles(self, person_contours):
+        """Update all particles with collision detection"""
+        for particle in self.particles:
+            particle.update(person_contours, self.speed_decay, self.min_speed_threshold, self.bounce_multiplier)
+    
+    def render_particles(self, output_frame):
+        """Render all particles as animated SVG-style bats"""
+        for particle in self.particles:
+            self.draw_svg_bat(output_frame, particle)
+    
+    def draw_svg_bat(self, frame, particle):
+        """Draw an animated SVG-style bat based on the reference design"""
+        x, y = int(particle.x), int(particle.y)
+        
+        # Calculate wing flap based on speed and time
+        current_speed = math.sqrt(particle.vx**2 + particle.vy**2)
+        wing_flap = math.sin(time.time() * 8 + current_speed * 3) * 0.3
+        
+        # Calculate body rotation based on movement direction
+        if particle.vx != 0 or particle.vy != 0:
+            body_angle = math.atan2(particle.vy, particle.vx)
         else:
-            print("   ⚠️  Device may not be ready, but continuing...")
+            body_angle = 0
+        
+        # Bat size based on speed
+        base_size = 8
+        size_multiplier = 1 + (current_speed / 5.0)  # Scale with speed
+        size = int(base_size * size_multiplier)
+        
+        # Draw bat body (ellipse)
+        body_color = (50, 50, 50)  # Dark gray
+        cv2.ellipse(frame, (x, y), (size//3, size//2), 
+                   int(math.degrees(body_angle)), 0, 360, body_color, -1)
+        
+        # Draw wings with detailed structure
+        self.draw_bat_wings(frame, x, y, size, wing_flap, body_angle, particle)
+        
+        # Draw glowing eyes
+        eye_color = (0, 255, 255)  # Cyan glow
+        eye_size = max(1, size // 8)
+        cv2.circle(frame, (x - size//6, y - size//8), eye_size, eye_color, -1)
+        cv2.circle(frame, (x + size//6, y - size//8), eye_size, eye_color, -1)
+    
+    def draw_bat_wings(self, frame, x, y, size, wing_flap, body_angle, particle):
+        """Draw detailed bat wings with bone structure like the reference"""
+        # Wing parameters
+        wing_span = size * 2
+        wing_height = size
+        
+        # Calculate wing positions with flapping
+        left_wing_angle = body_angle - math.pi/2 + wing_flap
+        right_wing_angle = body_angle + math.pi/2 - wing_flap
+        
+        # Draw left wing
+        self.draw_detailed_wing(frame, x, y, wing_span, wing_height, 
+                              left_wing_angle, particle, "left")
+        
+        # Draw right wing  
+        self.draw_detailed_wing(frame, x, y, wing_span, wing_height,
+                              right_wing_angle, particle, "right")
+    
+    def draw_detailed_wing(self, frame, x, y, span, height, angle, particle, side):
+        """Draw a detailed wing with bone structure and scalloped edges"""
+        # Wing color
+        wing_color = (30, 30, 30)  # Dark gray
+        bone_color = (100, 100, 100)  # Light gray for bones
+        
+        # Calculate wing points
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        
+        # Wing base (connected to body)
+        base_x = x + int(span//4 * cos_a)
+        base_y = y + int(span//4 * sin_a)
+        
+        # Wing tip
+        tip_x = x + int(span * cos_a)
+        tip_y = y + int(span * sin_a)
+        
+        # Wing top edge (curved)
+        top_x = x + int(span//2 * cos_a)
+        top_y = y + int(span//2 * sin_a) - height//2
+        
+        # Create wing outline with scalloped edges
+        wing_points = self.create_scalloped_wing_outline(base_x, base_y, tip_x, tip_y, top_x, top_y, side)
+        
+        # Draw wing fill
+        if len(wing_points) > 2:
+            cv2.fillPoly(frame, [np.array(wing_points, dtype=np.int32)], wing_color)
+        
+        # Draw bone structure (detailed lines like reference)
+        self.draw_wing_bones(frame, base_x, base_y, tip_x, tip_y, top_x, top_y, bone_color)
+    
+    def create_scalloped_wing_outline(self, base_x, base_y, tip_x, tip_y, top_x, top_y, side):
+        """Create wing outline with scalloped edges like the reference"""
+        points = []
+        
+        # Start from base
+        points.append([base_x, base_y])
+        
+        # Create scalloped edge along the wing
+        num_scallops = 4
+        for i in range(num_scallops + 1):
+            t = i / num_scallops
+            
+            # Interpolate along wing edge
+            edge_x = int(base_x + (tip_x - base_x) * t)
+            edge_y = int(base_y + (tip_y - base_y) * t)
+            
+            # Add scallop (sharp points)
+            if i < num_scallops:
+                # Create sharp point
+                scallop_x = edge_x + (5 if side == "right" else -5)
+                scallop_y = edge_y + 3
+                points.append([scallop_x, scallop_y])
+            
+            points.append([edge_x, edge_y])
+        
+        # Add top edge
+        points.append([top_x, top_y])
+        
+        return points
+    
+    def draw_wing_bones(self, frame, base_x, base_y, tip_x, tip_y, top_x, top_y, bone_color):
+        """Draw wing bone structure like the reference"""
+        # Main bone (from base to tip)
+        cv2.line(frame, (base_x, base_y), (tip_x, tip_y), bone_color, 1)
+        
+        # Secondary bones (from base to various points)
+        for i in range(3):
+            t = (i + 1) / 4
+            bone_x = int(base_x + (tip_x - base_x) * t)
+            bone_y = int(base_y + (tip_y - base_y) * t)
+            
+            # Draw bone line
+            cv2.line(frame, (base_x, base_y), (bone_x, bone_y), bone_color, 1)
+            
+            # Add small branches
+            branch_x = bone_x + (5 if i % 2 == 0 else -5)
+            branch_y = bone_y + 2
+            cv2.line(frame, (bone_x, bone_y), (branch_x, branch_y), bone_color, 1)
 
     def update_min_distance_feet(self, val):
         """Update min distance from trackbar"""
@@ -131,6 +393,24 @@ class SimplePersonGhost:
         """Update video opacity from trackbar"""
         self.video_opacity = val / 100.0
         print(f"Video opacity set to {self.video_opacity:.2f}")
+    
+    def update_particle_count(self, val):
+        """Update particle count from trackbar"""
+        if val != self.particle_count:
+            self.particle_count = val
+            print(f"Particle count set to {self.particle_count}")
+            # Reinitialize particles with new count
+            self.initialize_particles()
+    
+    def update_min_speed(self, val):
+        """Update minimum speed from trackbar"""
+        self.min_speed = val / 10.0
+        print(f"Min speed set to {self.min_speed:.1f}")
+    
+    def update_max_speed(self, val):
+        """Update maximum speed from trackbar"""
+        self.max_speed = val / 10.0
+        print(f"Max speed set to {self.max_speed:.1f}")
     
     def average_frames(self, frames_list):
         """Average multiple frames to create a higher quality background image"""
@@ -346,54 +626,37 @@ Instructions:
             print("Make sure Kinect is connected and freenect is working")
 
 
-    def load_ghost_sprites(self):
-        """Load all ghost sprite images from sprites folder"""
-        sprite_folder = "sprites"
+    def create_silhouette_from_depth(self, depth_map, person_mask):
+        """Create a silhouette from the depth map for the detected person"""
+        # Create a silhouette by using the person mask
+        silhouette = np.zeros_like(depth_map, dtype=np.uint8)
+        silhouette[person_mask] = 255
         
-        if not os.path.exists(sprite_folder):
-            print(f"Sprite folder '{sprite_folder}' not found!")
-            return
+        # Convert to 3-channel for blending
+        silhouette_3ch = cv2.cvtColor(silhouette, cv2.COLOR_GRAY2BGR)
         
-        # Load all ghost images
-        for filename in sorted(os.listdir(sprite_folder)):
-            if filename.endswith('.png'):
-                sprite_path = os.path.join(sprite_folder, filename)
-                sprite = cv2.imread(sprite_path, cv2.IMREAD_UNCHANGED)
-                if sprite is not None:
-                    self.ghost_sprites.append(sprite)
-                    print(f"Loaded ghost sprite: {filename}")
-                else:
-                    print(f"Failed to load: {filename}")
-        
-        if len(self.ghost_sprites) == 0:
-            print("No ghost sprites loaded!")
-        else:
-            print(f"Total ghosts loaded: {len(self.ghost_sprites)}")
+        return silhouette_3ch
 
     def get_depth_data(self):
         """Get depth data from Kinect"""
         try:
-            # Add a small delay to prevent rapid calls that might cause crashes
-            time.sleep(0.01)
             depth, _ = freenect.sync_get_depth()
             if depth is None:
                 return None
             return depth
         except Exception as e:
-            print(f"Depth error: {e}")
+            # Don't print every error to avoid spam
             return None
 
     def get_rgb_data(self):
         """Get RGB data from Kinect"""
         try:
-            # Add a small delay to prevent rapid calls that might cause crashes
-            time.sleep(0.01)
             rgb, _ = freenect.sync_get_video()
             if rgb is None:
                 return None
             return rgb
         except Exception as e:
-            print(f"RGB error: {e}")
+            # Don't print every error to avoid spam
             return None
 
     def find_person_center(self, depth):
@@ -438,42 +701,14 @@ Instructions:
         d[np.isnan(d)] = 0
         return d.astype(np.uint8)
     
-    def assign_ghost_to_person(self, person_id):
-        """Assign a random ghost to a person if they don't have one yet"""
-        if person_id not in self.person_ghost_map:
-            if len(self.ghost_sprites) > 0:
-                self.person_ghost_map[person_id] = random.choice(self.ghost_sprites)
-                # Initialize fade data for this person
-                # Random cycle time between 0.5 and 2.0 seconds
-                cycle_time = random.uniform(0.5, 2.0)
-                self.person_fade_data[person_id] = {
-                    'cycle_time': cycle_time,
-                    'start_time': time.time(),
-                    'min_opacity': 0.4,
-                    'max_opacity': 0.8
-                }
-                print(f"Assigned ghost to person {person_id} with {cycle_time:.2f}s fade cycle")
-        return self.person_ghost_map.get(person_id, None)
+    def add_silhouette_to_trail(self, silhouette):
+        """Add a silhouette to the ghost trail"""
+        self.ghost_trails.append(silhouette.copy())
+        
+        # Keep only the last N frames
+        if len(self.ghost_trails) > self.ghost_trail_length:
+            self.ghost_trails.pop(0)
     
-    def get_current_opacity(self, person_id):
-        """Calculate current opacity for a person's ghost based on fade cycle"""
-        if person_id not in self.person_fade_data:
-            return self.ghost_alpha
-        
-        fade_data = self.person_fade_data[person_id]
-        elapsed = time.time() - fade_data['start_time']
-        
-        # Calculate position in cycle (0 to 1)
-        cycle_position = (elapsed % fade_data['cycle_time']) / fade_data['cycle_time']
-        
-        # Use sine wave for smooth fade in/out
-        # Sine goes from -1 to 1, so we adjust to 0 to 1
-        sine_value = (np.sin(cycle_position * 2 * np.pi) + 1) / 2
-        
-        # Map to min/max opacity range
-        opacity = fade_data['min_opacity'] + sine_value * (fade_data['max_opacity'] - fade_data['min_opacity'])
-        
-        return opacity
     
     def track_people(self, current_blobs):
         """Track people across frames and maintain ghost assignments"""
@@ -669,226 +904,219 @@ Instructions:
 
     def run(self):
         """Main loop"""
-        print("👻 Simple Person Ghost Tracking")
+        print("🦇 Bat Particle Effect")
         print("Use the Control Panel to adjust settings!")
         print("Press 'q' to quit, 's' to save a frame")
         print("Looking for Kinect...")
         
-        consecutive_failures = 0
-        max_failures = 10
-        
-        while True:
-            try:
+        try:
+            while True:
                 # Get data from Kinect
                 depth = self.get_depth_data()
                 rgb = self.get_rgb_data()
                 
                 if depth is None or rgb is None:
-                    consecutive_failures += 1
-                    if consecutive_failures > max_failures:
-                        print(f"\n❌ Too many consecutive failures ({consecutive_failures}), stopping...")
-                        break
-                    
-                    print(f"Waiting for Kinect... (failures: {consecutive_failures})", end='\r')
+                    print("Waiting for Kinect...", end='\r')
                     # Show a test pattern while waiting for Kinect
                     test_output = np.zeros((480, 640, 3), dtype=np.uint8)
                     cv2.putText(test_output, "Waiting for Kinect...", (50, 240), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
                     cv2.putText(test_output, "Make sure Kinect is plugged in and powered", (50, 280), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                    cv2.imshow("👻 Ghost Tracking - Main View", test_output)
-                cv2.imshow("🔍 Depth Map & Detection", test_output)
-                time.sleep(0.1)
-                continue
-            
-            except Exception as e:
-                consecutive_failures += 1
-                print(f"\n❌ Error in main loop: {e}")
-                if consecutive_failures > max_failures:
-                    print(f"❌ Too many consecutive failures ({consecutive_failures}), stopping...")
-                    break
-                time.sleep(0.1)
-                continue
-            
-            # Reset failure counter on successful frame
-            consecutive_failures = 0
-            
-            # Mirror RGB feed for easier interaction
-            rgb_mirrored = cv2.flip(rgb, 1)
-            
-            # Capture background if button was pressed
-            if self.capture_background:
-                # Start time exposure capture (3 seconds)
-                self.time_exposure_start_time = time.time()
-                self.time_exposure_frames_list = []
-                print(f"⏱️ Starting 3-second time exposure capture...")
-                self.capture_background = False  # Reset flag, will be handled in time exposure logic
-            
-            # Handle time exposure capture (3-second duration)
-            if self.time_exposure_start_time is not None:
-                elapsed_time = time.time() - self.time_exposure_start_time
-                if elapsed_time < self.time_exposure_duration:
-                    # Still capturing - add frame to list
-                    self.time_exposure_frames_list.append(rgb_mirrored.copy())
-                    remaining_time = self.time_exposure_duration - elapsed_time
-                    print(f"⏱️ Time exposure: {elapsed_time:.1f}s / {self.time_exposure_duration:.1f}s (frames: {len(self.time_exposure_frames_list)})")
-                    
-                    # Progress will be shown on the final output layer later
-                else:
-                    # Time exposure complete - process frames
-                    print("⏱️ Processing time exposure frames with noise reduction...")
-                    self.background_image = self.average_frames_with_noise_reduction(self.time_exposure_frames_list)
-                    print(f"✅ 3-second time exposure background captured! ({len(self.time_exposure_frames_list)} frames)")
-                    print("You can now step in front of the camera.")
-                    # Mark as completed
-                    self.time_exposure_start_time = None
+                    cv2.imshow("👻 Video Ghosting Effect - Main View", test_output)
+                    cv2.imshow("🔍 Depth Map & Detection", test_output)
+                    time.sleep(0.1)
+                    continue
+                
+                # Mirror RGB feed for easier interaction
+                rgb_mirrored = cv2.flip(rgb, 1)
+                
+                # Capture background if button was pressed
+                if self.capture_background:
+                    # Start time exposure capture (3 seconds)
+                    self.time_exposure_start_time = time.time()
                     self.time_exposure_frames_list = []
-            
-            # Create output with video opacity
-            if self.background_image is not None:
-                # Use captured background
-                output = self.background_image.copy()
-                if self.video_opacity > 0:
-                    # Blend current frame with background based on opacity
-                    output = cv2.addWeighted(self.background_image, 1 - self.video_opacity,
-                                            rgb_mirrored, self.video_opacity, 0)
-            elif self.video_opacity > 0:
-                # Use live feed as background
-                output = rgb_mirrored.copy()
-                output = cv2.addWeighted(output, self.video_opacity,
-                                       np.zeros_like(output), 1 - self.video_opacity, 0)
-            else:
-                output = np.zeros_like(rgb_mirrored)
-            
-            # Mirror depth feed to match RGB
-            depth_mirrored = cv2.flip(depth, 1)
-            
-            # Find all person blobs
-            person_blobs = self.find_all_person_blobs(depth_mirrored)
-            
-            if person_blobs:
-                # Draw ghost sprite on each detected blob
-                for i, blob_data in enumerate(person_blobs):
-                    # Extract blob data (now includes person ID)
-                    if len(blob_data) == 5:
-                        cx, cy, blob_depth, contour, person_id = blob_data
+                    print(f"⏱️ Starting 3-second time exposure capture...")
+                    self.capture_background = False  # Reset flag, will be handled in time exposure logic
+                
+                # Handle time exposure capture (3-second duration)
+                if self.time_exposure_start_time is not None:
+                    elapsed_time = time.time() - self.time_exposure_start_time
+                    if elapsed_time < self.time_exposure_duration:
+                        # Still capturing - add frame to list
+                        self.time_exposure_frames_list.append(rgb_mirrored.copy())
+                        remaining_time = self.time_exposure_duration - elapsed_time
+                        print(f"⏱️ Time exposure: {elapsed_time:.1f}s / {self.time_exposure_duration:.1f}s (frames: {len(self.time_exposure_frames_list)})")
+                        
+                        # Progress will be shown on the final output layer later
                     else:
-                        cx, cy, blob_depth, contour = blob_data
-                        person_id = i + 1
+                        # Time exposure complete - process frames
+                        print("⏱️ Processing time exposure frames with noise reduction...")
+                        self.background_image = self.average_frames_with_noise_reduction(self.time_exposure_frames_list)
+                        print(f"✅ 3-second time exposure background captured! ({len(self.time_exposure_frames_list)} frames)")
+                        print("You can now step in front of the camera.")
+                        # Mark as completed
+                        self.time_exposure_start_time = None
+                        self.time_exposure_frames_list = []
+                
+                # Create output with video opacity
+                if self.background_image is not None:
+                    # Use captured background
+                    output = self.background_image.copy()
+                    if self.video_opacity > 0:
+                        # Blend current frame with background based on opacity
+                        output = cv2.addWeighted(self.background_image, 1 - self.video_opacity,
+                                                rgb_mirrored, self.video_opacity, 0)
+                elif self.video_opacity > 0:
+                    # Use live feed as background
+                    output = rgb_mirrored.copy()
+                    output = cv2.addWeighted(output, self.video_opacity,
+                                           np.zeros_like(output), 1 - self.video_opacity, 0)
+                else:
+                    output = np.zeros_like(rgb_mirrored)
+                
+                # Mirror depth feed to match RGB
+                depth_mirrored = cv2.flip(depth, 1)
+                
+                # Performance optimization: only process silhouettes every few frames
+                self.frame_counter += 1
+                should_process_silhouette = (self.frame_counter % self.frame_skip == 0)
+                
+                # Find all person blobs
+                person_blobs = self.find_all_person_blobs(depth_mirrored)
+                
+                # Update particles with collision detection
+                person_contours = [blob_data[3] for blob_data in person_blobs] if person_blobs else []
+                self.update_particles(person_contours)
+                
+                if person_blobs and should_process_silhouette:
+                    # Create combined silhouette from all detected people
+                    combined_silhouette = np.zeros_like(depth_mirrored, dtype=np.uint8)
                     
-                    # Draw bounding box around blob (debug mode only)
-                    x, y, w, h = cv2.boundingRect(contour)
-                    if self.debug_mode:
-                        cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    
-                    # Get or assign ghost sprite for this person
-                    ghost_sprite = self.assign_ghost_to_person(person_id)
-                    
-                    if ghost_sprite is not None:
-                        # Get current opacity for this person's fade cycle
-                        current_opacity = self.get_current_opacity(person_id)
-                        
-                        # Draw ghost sprite proportionally scaled to bounding box height
-                        # Height matches bounding box, width maintains sprite's aspect ratio
-                        sprite_h, sprite_w = ghost_sprite.shape[:2]
-                        aspect_ratio = sprite_w / sprite_h
-                        
-                        # Use bounding box height as sprite height
-                        ghost_height = h
-                        ghost_width = int(ghost_height * aspect_ratio)
-                        
-                        # Resize sprite maintaining aspect ratio
-                        ghost_resized = cv2.resize(ghost_sprite, (ghost_width, ghost_height))
-                        
-                        # Center sprite in bounding box
-                        center_x = x + w // 2
-                        center_y = y + h // 2
-                        
-                        # Calculate position to center the sprite
-                        x1 = max(0, center_x - ghost_width // 2)
-                        y1 = max(0, center_y - ghost_height // 2)
-                        x2 = min(output.shape[1], center_x + ghost_width // 2)
-                        y2 = min(output.shape[0], center_y + ghost_height // 2)
-                        
-                        # Adjust if needed
-                        actual_w = x2 - x1
-                        actual_h = y2 - y1
-                        if actual_w != ghost_width or actual_h != ghost_height:
-                            ghost_resized = cv2.resize(ghost_resized, (actual_w, actual_h))
-                        
-                        # Blend sprite with background using current opacity
-                        if ghost_resized.shape[2] == 4:
-                            alpha = ghost_resized[:, :, 3] / 255.0
-                            ghost_rgb = ghost_resized[:, :, :3]
+                    for i, blob_data in enumerate(person_blobs):
+                        # Extract blob data
+                        if len(blob_data) == 5:
+                            cx, cy, blob_depth, contour, person_id = blob_data
                         else:
-                            alpha = np.ones((ghost_resized.shape[0], ghost_resized.shape[1]))
-                            ghost_rgb = ghost_resized
+                            cx, cy, blob_depth, contour = blob_data
+                            person_id = i + 1
                         
-                        roi = output[y1:y2, x1:x2]
-                        for c in range(3):
-                            roi[:, :, c] = (1 - alpha * current_opacity) * roi[:, :, c] + \
-                                          (alpha * current_opacity) * ghost_rgb[:, :, c]
+                        # Draw bounding box around blob (debug mode only)
+                        x, y, w, h = cv2.boundingRect(contour)
+                        if self.debug_mode:
+                            cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                        
+                        # Create mask for this person
+                        person_mask = np.zeros_like(depth_mirrored, dtype=np.uint8)
+                        cv2.fillPoly(person_mask, [contour], 255)
+                        
+                        # Add to combined silhouette
+                        combined_silhouette = cv2.bitwise_or(combined_silhouette, person_mask)
+                        
+                        # Draw person number and distance (debug mode only)
+                        if self.debug_mode:
+                            distance_feet = blob_depth / 304.8
+                            cv2.putText(output, f"Person {person_id}: {distance_feet:.2f}ft", 
+                                       (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                     
-                    # Draw person number and distance (debug mode only)
-                    if self.debug_mode:
-                        distance_feet = blob_depth / 304.8
-                        cv2.putText(output, f"Person {person_id}: {distance_feet:.2f}ft", 
-                                   (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                    # Add current silhouette to trail
+                    if np.any(combined_silhouette):
+                        self.add_silhouette_to_trail(combined_silhouette)
+                        self.last_silhouette = combined_silhouette.copy()
+                elif person_blobs and not should_process_silhouette:
+                    # Use last silhouette for skipped frames
+                    if self.last_silhouette is not None:
+                        self.add_silhouette_to_trail(self.last_silhouette)
+                
+                # Start with background if available, otherwise use current frame
+                if self.background_image is not None:
+                    output = self.background_image.copy()
+                else:
+                    output = rgb_mirrored.copy()
+                
+                # Draw all silhouettes in the trail with decreasing opacity (optimized)
+                for i, trail_silhouette in enumerate(self.ghost_trails):
+                    if np.any(trail_silhouette):
+                        # Calculate opacity (newer silhouettes are more opaque)
+                        opacity = self.silhouette_alpha * (i + 1) / len(self.ghost_trails)
+                        
+                        # Create mask for silhouette (white areas only)
+                        mask = trail_silhouette > 0
+                        
+                        # Apply silhouette with transparency using vectorized operations
+                        silhouette_color_array = np.array(self.silhouette_color, dtype=np.uint8)
+                        output[mask] = (1 - opacity) * output[mask] + opacity * silhouette_color_array
                 
                 # Display status (debug mode only)
                 if self.debug_mode:
                     cv2.putText(output, f"{len(person_blobs)} person(s) detected!", 
                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            else:
-                # Show current distance range in feet (debug mode only)
-                if self.debug_mode:
-                    min_feet = self.depth_min / 304.8
-                    max_feet = self.depth_max / 304.8
-                    cv2.putText(output, "No person detected - adjust distance range", 
-                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    cv2.putText(output, f"Range: {min_feet:.4f} - {max_feet:.4f} feet", 
-                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                else:
+                    # Show current distance range in feet (debug mode only)
+                    if self.debug_mode:
+                        min_feet = self.depth_min / 304.8
+                        max_feet = self.depth_max / 304.8
+                        cv2.putText(output, "No person detected - adjust distance range", 
+                                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        cv2.putText(output, f"Range: {min_feet:.4f} - {max_feet:.4f} feet", 
+                                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                # Add time exposure countdown text to top layer (always visible)
+                if self.time_exposure_start_time is not None:
+                    elapsed_time = time.time() - self.time_exposure_start_time
+                    remaining_time = self.time_exposure_duration - elapsed_time
+                    if remaining_time > 0:
+                        cv2.putText(output, f"Capturing background... {remaining_time:.1f}s remaining", 
+                                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                
+                # Render particles on top of everything
+                self.render_particles(output)
+                
+                # Display output
+                cv2.imshow("🦇 Bat Particle Effect - Main View", output)
+                
+                # Show debug depth mask with gradient
+                debug_mask = self.normalize_depth(depth_mirrored)
+                if person_blobs:
+                    # Draw detected contours on gradient
+                    for blob_data in person_blobs:
+                        # Extract contour from blob data
+                        if len(blob_data) == 5:
+                            _, _, _, contour, _ = blob_data
+                        else:
+                            _, _, _, contour = blob_data
+                        cv2.drawContours(debug_mask, [contour], -1, 0, 2)  # Draw in black for visibility
+                cv2.imshow("🔍 Depth Map & Detection", debug_mask)
+                
+                # Handle key presses
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                elif key == ord('s'):
+                    timestamp = int(time.time() * 1000)
+                    cv2.imwrite(f"video_ghosting_effect_{timestamp}.png", output)
+                    print(f"Saved video_ghosting_effect_{timestamp}.png")
             
-            # Add time exposure countdown text to top layer (always visible)
-            if self.time_exposure_start_time is not None:
-                elapsed_time = time.time() - self.time_exposure_start_time
-                remaining_time = self.time_exposure_duration - elapsed_time
-                if remaining_time > 0:
-                    cv2.putText(output, f"Capturing background... {remaining_time:.1f}s remaining", 
-                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            
-            # Display output
-            cv2.imshow("👻 Ghost Tracking - Main View", output)
-            
-            # Show debug depth mask with gradient
-            debug_mask = self.normalize_depth(depth_mirrored)
-            if person_blobs:
-                # Draw detected contours on gradient
-                for blob_data in person_blobs:
-                    # Extract contour from blob data
-                    if len(blob_data) == 5:
-                        _, _, _, contour, _ = blob_data
-                    else:
-                        _, _, _, contour = blob_data
-                    cv2.drawContours(debug_mask, [contour], -1, 0, 2)  # Draw in black for visibility
-            cv2.imshow("🔍 Depth Map & Detection", debug_mask)
-            
-            # Handle key presses
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-            elif key == ord('s'):
-                timestamp = int(time.time() * 1000)
-                cv2.imwrite(f"simple_person_ghost_{timestamp}.png", output)
-                print(f"Saved simple_person_ghost_{timestamp}.png")
-            
-        
-        cv2.destroyAllWindows()
+        except KeyboardInterrupt:
+            print("\n🛑 Interrupted by user")
+        except Exception as e:
+            print(f"❌ Error in main loop: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            print("🧹 Cleaning up...")
+            cv2.destroyAllWindows()
+            # Safe cleanup of freenect
+            try:
+                freenect.sync_stop()
+            except:
+                pass  # Ignore cleanup errors
+            print("✅ Cleanup complete")
 
 if __name__ == "__main__":
     try:
-        tracker = SimplePersonGhost()
-        tracker.run()
+        effect = ParticleGhostingEffect()
+        effect.run()
     except Exception as e:
         print(f"An error occurred: {e}")
         import traceback

@@ -1,0 +1,4 @@
+#!/bin/bash
+# KinectMaster App Launcher
+cd "$(dirname "$0")"
+exec ./KinectMasterExec

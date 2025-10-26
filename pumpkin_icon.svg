@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Pumpkin body -->
+  <ellipse cx="256" cy="320" rx="180" ry="160" fill="#FF8C00" stroke="#FF7F00" stroke-width="4"/>
+  
+  <!-- Pumpkin ridges -->
+  <path d="M 120 200 Q 180 180 240 200 Q 200 220 160 240 Q 120 260 80 280 Q 120 300 160 320 Q 200 340 240 360 Q 180 380 120 360 Q 80 340 80 300 Q 80 260 120 200" fill="#FF7F00"/>
+  <path d="M 240 200 Q 300 180 360 200 Q 320 220 280 240 Q 240 260 200 280 Q 240 300 280 320 Q 320 340 360 360 Q 300 380 240 360 Q 200 340 200 300 Q 200 260 240 200" fill="#FF7F00"/>
+  
+  <!-- Pumpkin stem -->
+  <rect x="240" y="140" width="32" height="60" rx="16" fill="#228B22"/>
+  <ellipse cx="256" cy="140" rx="20" ry="8" fill="#32CD32"/>
+  
+  <!-- Pumpkin face - eyes -->
+  <ellipse cx="200" cy="280" rx="25" ry="35" fill="#000"/>
+  <ellipse cx="312" cy="280" rx="25" ry="35" fill="#000"/>
+  
+  <!-- Pumpkin face - nose -->
+  <polygon points="256,320 240,340 272,340" fill="#000"/>
+  
+  <!-- Pumpkin face - mouth -->
+  <path d="M 180 380 Q 200 420 240 400 Q 256 410 272 400 Q 312 420 332 380" stroke="#000" stroke-width="8" fill="none" stroke-linecap="round"/>
+  
+  <!-- Teeth -->
+  <rect x="240" y="380" width="8" height="20" fill="#000"/>
+  <rect x="264" y="380" width="8" height="20" fill="#000"/>
+</svg>
